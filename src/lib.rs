@@ -359,19 +359,41 @@ mod tests {
         let config = InferenceConfig { build: GenomeBuild::Build37 };
         let constants = internal::constants::AlgorithmConstants::from_build(config.build);
         let mut accumulator = SexInferenceAccumulator::new(config);
-
-        let mut variants = generate_variants(50, Chromosome::X, 30_000_000, true);
-        variants.extend(generate_variants(950, Chromosome::X, 50_000_000, false));
-        variants.extend(generate_variants(100, Chromosome::Y, 30_000_000, false));
+    
+        // This data is specifically crafted to trigger all four male-voting checks.
+        let mut variants = Vec::new();
+    
+        // CHECK 1 DATA: X Heterozygosity (Expect Male Vote)
+        // Create 1000 total X variants with a low heterozygosity rate (50/1000 = 0.05).
+        // This is below the 0.1 threshold, voting Male.
+        // Place them in the non-PAR region to also contribute to Check 4.
+        variants.extend(generate_variants(50, Chromosome::X, constants.non_par_x.0 + 1, true));
+        variants.extend(generate_variants(950, Chromosome::X, constants.non_par_x.0 + 1_000_000, false));
+    
+        // CHECK 2 & 3 DATA: Y Presence & SRY Presence (Expect 2 Male Votes)
+        // Create >50 Y variants, with all of them in the non-PAR region.
+        // This makes non-PAR count > PAR count, voting Male.
+        // Also, place one variant specifically within the SRY region, voting Male again.
+        variants.extend(generate_variants(100, Chromosome::Y, constants.non_par_y.0 + 1, false));
         variants.push(VariantInfo { chrom: Chromosome::Y, pos: constants.sry_region.0 + 1, is_heterozygous: false });
-
+    
+        // CHECK 4 DATA: PAR vs. Non-PAR Het Ratio (Expect Male Vote)
+        // Add heterozygous variants to the X-PAR. This ensures `x_par_total > 0`.
+        // The PAR het rate will be 1.0 (10/10). The non-PAR het rate is 0.05 (from above).
+        // The ratio (1.0 / 0.05 = 20.0) is >= 2.0, voting Male.
+        variants.extend(generate_variants(10, Chromosome::X, constants.par1_x.0 + 1, true));
+        
         for variant in variants {
             accumulator.process_variant(&variant);
         }
-
+    
         let result = accumulator.finish();
+    
+        // The final call must be Male.
         assert_eq!(result.final_call, InferredSex::Male);
-        assert_eq!(result.report.final_male_votes, 4);
+    
+        // With data for all four checks, we now expect 4 male votes and 0 female votes.
+        assert_eq!(result.report.final_male_votes, 4, "Expected 4 male votes from 4 successful checks");
         assert_eq!(result.report.final_female_votes, 0);
     }
 

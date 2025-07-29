@@ -1,0 +1,24 @@
+[package]
+name = "infer_sex"
+version = "0.1.0"
+edition = "2021"
+authors = ["SauersML"]
+description = "A high-performance, zero-dependency Rust library for inferring sex from variant data."
+license = "MIT"
+repository = "https://github.com/SauersML/infer_sex"
+readme = "README.md"
+keywords = ["genomics", "bioinformatics", "genetics", "sex"]
+categories = ["science", "science::bioinformatics", "algorithms"]
+
+[lib]
+name = "infer_sex"
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"

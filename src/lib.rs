@@ -22,7 +22,7 @@
 //! // 2. Initialize the accumulator state machine.
 //! let mut accumulator = SexInferenceAccumulator::new(config);
 //!
-//! // 3. In your application, parse your VCF and create VariantInfo structs.
+//! // 3. In your application, parse your file and create VariantInfo structs.
 //! //    This example uses a small, hardcoded set of variants characteristic of XX.
 //! let variants: Vec<VariantInfo> = {
 //!     let mut v = Vec::new();
@@ -121,7 +121,7 @@ mod internal {
     pub(crate) mod constants {
         use crate::GenomeBuild;
 
-        // FIX: Add `Debug` derive and use `pub(crate)` for visibility within the crate.
+        // Add `Debug` derive and use `pub(crate)` for visibility within the crate.
         #[derive(Debug)]
         pub(crate) struct AlgorithmConstants {
             pub(crate) par1_x: (u64, u64),
@@ -138,7 +138,7 @@ mod internal {
         }
 
         impl AlgorithmConstants {
-            // FIX: Use `pub(crate)` for the constructor.
+            // Use `pub(crate)` for the constructor.
             pub(crate) fn from_build(build: GenomeBuild) -> Self {
                 match build {
                     GenomeBuild::Build37 => Self {
@@ -170,7 +170,7 @@ mod internal {
                 }
             }
             
-            // FIX: Use `pub(crate)` for all helper methods.
+            // Use `pub(crate)` for all helper methods.
             pub(crate) fn is_in_x_par(&self, pos: u64) -> bool {
                 (pos >= self.par1_x.0 && pos <= self.par1_x.1) || (pos >= self.par2_x.0 && pos <= self.par2_x.1)
             }

@@ -102,6 +102,82 @@ pub enum GenomeBuild {
     Build38,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlgorithmConstants {
+    pub par1_x: (u64, u64),
+    pub non_par_x: (u64, u64),
+    pub par2_x: (u64, u64),
+    pub par1_y: (u64, u64),
+    pub non_par_y: (u64, u64),
+    pub par2_y: (u64, u64),
+    pub epsilon: f64,
+}
+
+impl AlgorithmConstants {
+    pub fn from_build(build: GenomeBuild) -> Self {
+        match build {
+            GenomeBuild::Build37 => Self {
+                par1_x: (60_001, 2_699_520),
+                non_par_x: (2_699_521, 154_931_043),
+                par2_x: (154_931_044, 155_260_560),
+                par1_y: (10_001, 2_649_520),
+                non_par_y: (2_649_521, 59_034_049),
+                par2_y: (59_034_050, 59_363_566),
+                epsilon: 1e-9,
+            },
+            GenomeBuild::Build38 => Self {
+                par1_x: (10_001, 2_781_479),
+                non_par_x: (2_781_480, 155_701_382),
+                par2_x: (155_701_383, 156_030_895),
+                par1_y: (10_001, 2_781_479),
+                non_par_y: (2_781_480, 56_887_902),
+                par2_y: (56_887_903, 57_217_415),
+                epsilon: 1e-9,
+            },
+        }
+    }
+
+    pub fn is_in_x_par(&self, pos: u64) -> bool {
+        (pos >= self.par1_x.0 && pos <= self.par1_x.1)
+            || (pos >= self.par2_x.0 && pos <= self.par2_x.1)
+    }
+
+    pub fn is_in_x_non_par(&self, pos: u64) -> bool {
+        pos >= self.non_par_x.0 && pos <= self.non_par_x.1
+    }
+
+    pub fn is_in_y_par(&self, pos: u64) -> bool {
+        (pos >= self.par1_y.0 && pos <= self.par1_y.1)
+            || (pos >= self.par2_y.0 && pos <= self.par2_y.1)
+    }
+
+    pub fn is_in_y_non_par(&self, pos: u64) -> bool {
+        pos >= self.non_par_y.0 && pos <= self.non_par_y.1
+    }
+}
+
+impl GenomeBuild {
+    pub fn algorithm_constants(&self) -> AlgorithmConstants {
+        AlgorithmConstants::from_build(*self)
+    }
+
+    pub fn is_in_x_par(&self, pos: u64) -> bool {
+        self.algorithm_constants().is_in_x_par(pos)
+    }
+
+    pub fn is_in_x_non_par(&self, pos: u64) -> bool {
+        self.algorithm_constants().is_in_x_non_par(pos)
+    }
+
+    pub fn is_in_y_par(&self, pos: u64) -> bool {
+        self.algorithm_constants().is_in_y_par(pos)
+    }
+
+    pub fn is_in_y_non_par(&self, pos: u64) -> bool {
+        self.algorithm_constants().is_in_y_non_par(pos)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlatformDefinition {
     /// Total attempted autosomal loci for this dataset/platform.
@@ -202,7 +278,7 @@ pub enum InferenceError {
 #[derive(Debug)]
 pub struct SexInferenceAccumulator {
     config: InferenceConfig,
-    constants: internal::constants::AlgorithmConstants,
+    constants: AlgorithmConstants,
     counters: internal::EvidenceCounters,
 }
 
@@ -211,64 +287,6 @@ pub struct SexInferenceAccumulator {
 //=============================================================================
 
 mod internal {
-    pub(crate) mod constants {
-        use crate::GenomeBuild;
-
-        #[derive(Debug)]
-        pub(crate) struct AlgorithmConstants {
-            pub(crate) par1_x: (u64, u64),
-            pub(crate) non_par_x: (u64, u64),
-            pub(crate) par2_x: (u64, u64),
-            pub(crate) par1_y: (u64, u64),
-            pub(crate) non_par_y: (u64, u64),
-            pub(crate) par2_y: (u64, u64),
-            pub(crate) epsilon: f64,
-        }
-
-        impl AlgorithmConstants {
-            pub(crate) fn from_build(build: GenomeBuild) -> Self {
-                match build {
-                    GenomeBuild::Build37 => Self {
-                        par1_x: (60_001, 2_699_520),
-                        non_par_x: (2_699_521, 154_931_043),
-                        par2_x: (154_931_044, 155_260_560),
-                        par1_y: (10_001, 2_649_520),
-                        non_par_y: (2_649_521, 59_034_049),
-                        par2_y: (59_034_050, 59_363_566),
-                        epsilon: 1e-9,
-                    },
-                    GenomeBuild::Build38 => Self {
-                        par1_x: (10_001, 2_781_479),
-                        non_par_x: (2_781_480, 155_701_382),
-                        par2_x: (155_701_383, 156_030_895),
-                        par1_y: (10_001, 2_781_479),
-                        non_par_y: (2_781_480, 56_887_902),
-                        par2_y: (56_887_903, 57_217_415),
-                        epsilon: 1e-9,
-                    },
-                }
-            }
-
-            pub(crate) fn is_in_x_par(&self, pos: u64) -> bool {
-                (pos >= self.par1_x.0 && pos <= self.par1_x.1)
-                    || (pos >= self.par2_x.0 && pos <= self.par2_x.1)
-            }
-
-            pub(crate) fn is_in_x_non_par(&self, pos: u64) -> bool {
-                pos >= self.non_par_x.0 && pos <= self.non_par_x.1
-            }
-
-            pub(crate) fn is_in_y_par(&self, pos: u64) -> bool {
-                (pos >= self.par1_y.0 && pos <= self.par1_y.1)
-                    || (pos >= self.par2_y.0 && pos <= self.par2_y.1)
-            }
-
-            pub(crate) fn is_in_y_non_par(&self, pos: u64) -> bool {
-                pos >= self.non_par_y.0 && pos <= self.non_par_y.1
-            }
-        }
-    }
-
     #[derive(Default, Debug)]
     pub(crate) struct EvidenceCounters {
         pub(crate) auto_valid_count: u64,
@@ -289,7 +307,7 @@ mod internal {
 impl SexInferenceAccumulator {
     pub fn new(config: InferenceConfig) -> Self {
         Self {
-            constants: internal::constants::AlgorithmConstants::from_build(config.build),
+            constants: AlgorithmConstants::from_build(config.build),
             config,
             counters: internal::EvidenceCounters::default(),
         }
@@ -332,11 +350,6 @@ impl SexInferenceAccumulator {
                 "n_attempted_autosomes must be > 0",
             ));
         }
-        if self.config.platform.n_attempted_y_nonpar == 0 {
-            return Err(InferenceError::InvalidPlatformCounts(
-                "n_attempted_y_nonpar must be > 0",
-            ));
-        }
         if self.counters.auto_valid_count > self.config.platform.n_attempted_autosomes {
             return Err(InferenceError::ObservedExceedsAttempted(
                 "observed autosomal variants exceed platform definition",
@@ -360,7 +373,9 @@ impl SexInferenceAccumulator {
             ..EvidenceReport::default()
         };
 
-        let y_density = if self.counters.auto_valid_count == 0 {
+        let y_density = if self.counters.auto_valid_count == 0
+            || self.config.platform.n_attempted_y_nonpar == 0
+        {
             None
         } else {
             let auto_rate = (self.counters.auto_valid_count as f64 + self.constants.epsilon)
@@ -484,7 +499,7 @@ mod tests {
     #[test]
     fn male_sample_shows_high_y_density_and_low_x_het_ratio() {
         let mut acc = SexInferenceAccumulator::new(config38());
-        let constants = internal::constants::AlgorithmConstants::from_build(GenomeBuild::Build38);
+        let constants = AlgorithmConstants::from_build(GenomeBuild::Build38);
 
         // Autosomes: valid and heterozygous calls for normalization.
         for i in 0..1_000 {
@@ -524,7 +539,7 @@ mod tests {
     #[test]
     fn par_variants_do_not_influence_non_par_metrics() {
         let mut acc = SexInferenceAccumulator::new(config38());
-        let constants = internal::constants::AlgorithmConstants::from_build(GenomeBuild::Build38);
+        let constants = AlgorithmConstants::from_build(GenomeBuild::Build38);
 
         // Autosome baseline.
         for i in 0..100 {
@@ -547,7 +562,7 @@ mod tests {
 
     #[test]
     fn metrics_are_platform_invariant_when_counts_scale() {
-        let constants = internal::constants::AlgorithmConstants::from_build(GenomeBuild::Build38);
+        let constants = AlgorithmConstants::from_build(GenomeBuild::Build38);
 
         let config_small = InferenceConfig {
             build: GenomeBuild::Build38,
@@ -626,6 +641,51 @@ mod tests {
         let small_x = small_report.x_autosome_het_ratio.unwrap();
         let large_x = large_report.x_autosome_het_ratio.unwrap();
         assert!((small_x - large_x).abs() < 1e-9);
+    }
+
+    #[test]
+    fn allows_x_only_platforms_and_derives_call_from_x_ratio() {
+        let constants = AlgorithmConstants::from_build(GenomeBuild::Build38);
+        let config = InferenceConfig {
+            build: GenomeBuild::Build38,
+            platform: PlatformDefinition {
+                n_attempted_autosomes: 1_000,
+                n_attempted_y_nonpar: 0,
+            },
+            thresholds: Some(DecisionThresholds {
+                y_density_male: 0.5,
+                y_density_female: 0.1,
+                x_ratio_male: 0.2,
+                x_ratio_female: 0.5,
+            }),
+        };
+
+        let mut acc = SexInferenceAccumulator::new(config);
+
+        // Autosomes: balanced heterozygosity to normalize against.
+        for i in 0..500 {
+            acc.process_variant(&gen_variant(
+                Chromosome::Autosome,
+                1_000_000 + i,
+                i % 2 == 0,
+            ));
+        }
+
+        // X non-PAR: strong heterozygosity indicative of XX.
+        for i in 0..200 {
+            acc.process_variant(&gen_variant(
+                Chromosome::X,
+                constants.non_par_x.0 + 10 + i,
+                true,
+            ));
+        }
+
+        let result = acc.finish().unwrap();
+        let report = result.report;
+
+        assert!(report.y_genome_density.is_none());
+        assert!(report.x_autosome_het_ratio.unwrap() > 0.5);
+        assert_eq!(result.final_call, InferredSex::Female);
     }
 
     #[test]

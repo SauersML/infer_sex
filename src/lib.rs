@@ -44,9 +44,14 @@
 //! }
 //!
 //! let result: InferenceResult = acc.finish().expect("valid platform counts");
-//! assert_eq!(result.final_call, Some(InferredSex::Female));
+//! assert_eq!(result.final_call, InferredSex::Female);
 //! println!("Report: {:?}", result.report);
 //! ```
+//!
+//! The library always returns a binary `InferredSex` (Male or Female). If you do
+//! not supply [`DecisionThresholds`], a built-in default heuristic is used to
+//! derive the call while still exposing the underlying metrics for custom
+//! downstream logic.
 //!
 //! ## Platform definitions (`n_attempted_*`)
 //!
@@ -117,11 +122,23 @@ pub struct DecisionThresholds {
     pub x_ratio_female: f64,
 }
 
+impl Default for DecisionThresholds {
+    fn default() -> Self {
+        Self {
+            y_density_male: 0.5,
+            y_density_female: 0.1,
+            x_ratio_male: 0.2,
+            x_ratio_female: 0.5,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InferenceConfig {
     pub build: GenomeBuild,
     pub platform: PlatformDefinition,
-    /// Optional threshold set used to derive a binary call. If omitted, only metrics are returned.
+    /// Optional threshold set used to derive a binary call. If omitted, default
+    /// heuristics are applied to force a Male/Female decision.
     pub thresholds: Option<DecisionThresholds>,
 }
 
@@ -170,7 +187,7 @@ pub struct EvidenceReport {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InferenceResult {
-    pub final_call: Option<InferredSex>,
+    pub final_call: InferredSex,
     pub report: EvidenceReport,
 }
 
@@ -373,22 +390,31 @@ impl SexInferenceAccumulator {
         report.x_autosome_het_ratio = x_auto_ratio;
         report.composite_sex_index = composite;
 
-        let final_call = self.config.thresholds.and_then(|t| match y_density {
-            Some(y) if y > t.y_density_male => Some(InferredSex::Male),
-            Some(y) if y < t.y_density_female => Some(InferredSex::Female),
-            Some(_) => match x_auto_ratio {
-                Some(x) if x < t.x_ratio_male => Some(InferredSex::Male),
-                Some(x) if x > t.x_ratio_female => Some(InferredSex::Female),
-                _ => None,
-            },
-            None => match x_auto_ratio {
-                Some(x) if x < t.x_ratio_male => Some(InferredSex::Male),
-                Some(x) if x > t.x_ratio_female => Some(InferredSex::Female),
-                _ => None,
-            },
-        });
+        let thresholds = self.config.thresholds.unwrap_or_default();
+        let final_call = classify_sex(y_density, x_auto_ratio, thresholds);
 
         Ok(InferenceResult { final_call, report })
+    }
+}
+
+fn classify_sex(
+    y_density: Option<f64>,
+    x_auto_ratio: Option<f64>,
+    thresholds: DecisionThresholds,
+) -> InferredSex {
+    match y_density {
+        Some(y) if y > thresholds.y_density_male => InferredSex::Male,
+        Some(y) if y < thresholds.y_density_female => InferredSex::Female,
+        Some(_) => match x_auto_ratio {
+            Some(x) if x < thresholds.x_ratio_male => InferredSex::Male,
+            Some(x) if x > thresholds.x_ratio_female => InferredSex::Female,
+            _ => InferredSex::Male,
+        },
+        None => match x_auto_ratio {
+            Some(x) if x < thresholds.x_ratio_male => InferredSex::Male,
+            Some(x) if x > thresholds.x_ratio_female => InferredSex::Female,
+            _ => InferredSex::Female,
+        },
     }
 }
 
@@ -449,7 +475,7 @@ mod tests {
 
         let result = acc.finish();
         let report = result.as_ref().unwrap().report.clone();
-        assert_eq!(result.unwrap().final_call, Some(InferredSex::Female));
+        assert_eq!(result.unwrap().final_call, InferredSex::Female);
         assert!(report.y_genome_density.unwrap() < 0.1);
         assert!(report.x_autosome_het_ratio.unwrap() > 0.5);
         assert!(report.composite_sex_index.unwrap() < 0.5);
@@ -489,7 +515,7 @@ mod tests {
 
         let result = acc.finish();
         let report = result.as_ref().unwrap().report.clone();
-        assert_eq!(result.unwrap().final_call, Some(InferredSex::Male));
+        assert_eq!(result.unwrap().final_call, InferredSex::Male);
         assert!(report.y_genome_density.unwrap() > 0.5);
         assert!(report.x_autosome_het_ratio.unwrap() < 0.2);
         assert!(report.composite_sex_index.unwrap() > 1.0);

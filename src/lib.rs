@@ -21,12 +21,7 @@
 //!         n_attempted_autosomes: 2_000,
 //!         n_attempted_y_nonpar: 1_000,
 //!     },
-//!     thresholds: Some(DecisionThresholds {
-//!         y_density_male: 0.5,
-//!         y_density_female: 0.1,
-//!         x_ratio_male: 0.2,
-//!         x_ratio_female: 0.5,
-//!     }),
+//!     thresholds: Some(DecisionThresholds::default()),
 //! };
 //!
 //! let mut acc = SexInferenceAccumulator::new(config);
@@ -188,23 +183,17 @@ pub struct PlatformDefinition {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DecisionThresholds {
-    /// Y genome density value above which the sample is called male.
-    pub y_density_male: f64,
-    /// Y genome density value below which the sample is called female.
-    pub y_density_female: f64,
-    /// X-to-autosome heterozygosity ratio below which the sample is called male.
-    pub x_ratio_male: f64,
-    /// X-to-autosome heterozygosity ratio above which the sample is called female.
-    pub x_ratio_female: f64,
+    /// Slope of the linear decision boundary used to differentiate samples.
+    pub slope: f64,
+    /// Intercept of the linear decision boundary used to differentiate samples.
+    pub intercept: f64,
 }
 
 impl Default for DecisionThresholds {
     fn default() -> Self {
         Self {
-            y_density_male: 0.5,
-            y_density_female: 0.1,
-            x_ratio_male: 0.2,
-            x_ratio_female: 0.5,
+            slope: 0.3566,
+            intercept: 0.2738,
         }
     }
 }
@@ -417,19 +406,14 @@ fn classify_sex(
     x_auto_ratio: Option<f64>,
     thresholds: DecisionThresholds,
 ) -> InferredSex {
-    match y_density {
-        Some(y) if y > thresholds.y_density_male => InferredSex::Male,
-        Some(y) if y < thresholds.y_density_female => InferredSex::Female,
-        Some(_) => match x_auto_ratio {
-            Some(x) if x < thresholds.x_ratio_male => InferredSex::Male,
-            Some(x) if x > thresholds.x_ratio_female => InferredSex::Female,
-            _ => InferredSex::Male,
-        },
-        None => match x_auto_ratio {
-            Some(x) if x < thresholds.x_ratio_male => InferredSex::Male,
-            Some(x) if x > thresholds.x_ratio_female => InferredSex::Female,
-            _ => InferredSex::Female,
-        },
+    let y = y_density.unwrap_or(0.0);
+    let x = x_auto_ratio.unwrap_or(0.0);
+    let calculated_threshold = (thresholds.slope * x) + thresholds.intercept;
+
+    if y > calculated_threshold {
+        InferredSex::Male
+    } else {
+        InferredSex::Female
     }
 }
 
@@ -448,12 +432,7 @@ mod tests {
                 n_attempted_autosomes: 2_000,
                 n_attempted_y_nonpar: 1_000,
             },
-            thresholds: Some(DecisionThresholds {
-                y_density_male: 0.5,
-                y_density_female: 0.1,
-                x_ratio_male: 0.2,
-                x_ratio_female: 0.5,
-            }),
+            thresholds: Some(DecisionThresholds::default()),
         }
     }
 
@@ -652,12 +631,7 @@ mod tests {
                 n_attempted_autosomes: 1_000,
                 n_attempted_y_nonpar: 0,
             },
-            thresholds: Some(DecisionThresholds {
-                y_density_male: 0.5,
-                y_density_female: 0.1,
-                x_ratio_male: 0.2,
-                x_ratio_female: 0.5,
-            }),
+            thresholds: Some(DecisionThresholds::default()),
         };
 
         let mut acc = SexInferenceAccumulator::new(config);

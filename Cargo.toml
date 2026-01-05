@@ -1,7 +1,7 @@
 [package]
 name = "infer_sex"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["SauersML"]
 description = "A high-performance, zero-dependency Rust library for inferring sex from variant data."
 license = "MIT"

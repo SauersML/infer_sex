@@ -43,10 +43,11 @@
 //! println!("Report: {:?}", result.report);
 //! ```
 //!
-//! The library always returns a binary `InferredSex` (Male or Female). If you do
-//! not supply [`DecisionThresholds`], a built-in default heuristic is used to
-//! derive the call while still exposing the underlying metrics for custom
-//! downstream logic.
+//! The library returns `InferredSex::Male`, `InferredSex::Female`, or
+//! `InferredSex::Indeterminate` when no sex-chromosome evidence is observed. If
+//! you do not supply [`DecisionThresholds`], a built-in default heuristic is
+//! used to derive the call while still exposing the underlying metrics for
+//! custom downstream logic.
 //!
 //! ## Platform definitions (`n_attempted_*`)
 //!
@@ -202,8 +203,9 @@ impl Default for DecisionThresholds {
 pub struct InferenceConfig {
     pub build: GenomeBuild,
     pub platform: PlatformDefinition,
-    /// Optional threshold set used to derive a binary call. If omitted, default
-    /// heuristics are applied to force a Male/Female decision.
+    /// Optional threshold set used to derive a binary call when sex evidence is
+    /// observed. If omitted, default heuristics are applied to force a
+    /// Male/Female decision.
     pub thresholds: Option<DecisionThresholds>,
 }
 
@@ -228,6 +230,7 @@ pub struct VariantInfo {
 pub enum InferredSex {
     Male,
     Female,
+    Indeterminate,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -361,6 +364,18 @@ impl SexInferenceAccumulator {
             y_par_valid_count: self.counters.y_par_valid_count,
             ..EvidenceReport::default()
         };
+
+        let total_sex_observed = self.counters.x_non_par_valid_count
+            + self.counters.x_par_valid_count
+            + self.counters.y_non_par_valid_count
+            + self.counters.y_par_valid_count;
+
+        if total_sex_observed == 0 {
+            return Ok(InferenceResult {
+                final_call: InferredSex::Indeterminate,
+                report,
+            });
+        }
 
         let y_density = if self.counters.auto_valid_count == 0
             || self.config.platform.n_attempted_y_nonpar == 0
@@ -660,6 +675,25 @@ mod tests {
         assert!(report.y_genome_density.is_none());
         assert!(report.x_autosome_het_ratio.unwrap() > 0.5);
         assert_eq!(result.final_call, InferredSex::Female);
+    }
+
+    #[test]
+    fn autosome_only_samples_return_indeterminate() {
+        let mut acc = SexInferenceAccumulator::new(config38());
+
+        for i in 0..1_000 {
+            acc.process_variant(&gen_variant(
+                Chromosome::Autosome,
+                1_000_000 + i,
+                i % 2 == 0,
+            ));
+        }
+
+        let result = acc.finish().unwrap();
+        assert_eq!(result.final_call, InferredSex::Indeterminate);
+        assert!(result.report.y_genome_density.is_none());
+        assert!(result.report.x_autosome_het_ratio.is_none());
+        assert!(result.report.composite_sex_index.is_none());
     }
 
     #[test]

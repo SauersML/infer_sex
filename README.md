@@ -45,5 +45,5 @@ This algorithm has been validated on real-world microarray data.
 *   `InferenceConfig`: Specifies the genome build (`Build37` or `Build38`).
 *   `VariantInfo`: The input struct representing a single variant's chromosome, position, and heterozygosity.
 *   `SexInferenceAccumulator`: The main state machine that consumes `VariantInfo` structs.
-*   `InferenceResult`: The final output, containing the `final_call` (`InferredSex`) and the `report`.
+*   `InferenceResult`: The final output, containing the `final_call` (`InferredSex`) and the `report`. The call may be `Indeterminate` when no sex-chromosome evidence is observed.
 *   `EvidenceReport`: A breakdown of the results and vote from each of the internal checks.

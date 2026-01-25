@@ -778,12 +778,15 @@ mod tests {
 
     #[test]
     fn dtc_sample_infers_male() {
-        let path = "data/genome_Christopher_Smith_v5_Full_20230926164611_test.txt";
+        let path = format!(
+            "{}/data/genome_Christopher_Smith_v5_Full_20230926164611_test.txt",
+            env!("CARGO_MANIFEST_DIR")
+        );
         let constants = AlgorithmConstants::from_build(GenomeBuild::Build37);
 
         let mut attempted_autosomes = 0_u64;
         let mut attempted_y_nonpar = 0_u64;
-        for_each_dtc_row(path, |chrom, pos, _geno| {
+        for_each_dtc_row(&path, |chrom, pos, _geno| {
             match chrom {
                 Chromosome::Autosome => attempted_autosomes += 1,
                 Chromosome::Y => {
@@ -809,7 +812,7 @@ mod tests {
         };
         let mut acc = SexInferenceAccumulator::new(config);
 
-        for_each_dtc_row(path, |chrom, pos, geno| {
+        for_each_dtc_row(&path, |chrom, pos, geno| {
             if is_missing_genotype(geno) {
                 return;
             }

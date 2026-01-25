@@ -439,6 +439,8 @@ fn classify_sex(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
 
     fn config38() -> InferenceConfig {
         InferenceConfig {
@@ -720,5 +722,109 @@ mod tests {
         }
         let err = acc.finish().unwrap_err();
         assert!(matches!(err, InferenceError::ObservedExceedsAttempted(_)));
+    }
+
+    fn for_each_dtc_row<F>(path: &str, mut f: F) -> std::io::Result<()>
+    where
+        F: FnMut(Chromosome, u64, &str),
+    {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let fields: Vec<&str> = trimmed.split('\t').collect();
+            if fields.len() < 4 {
+                continue;
+            }
+
+            let chrom = match fields[1].trim() {
+                "X" => Chromosome::X,
+                "Y" => Chromosome::Y,
+                "MT" => continue,
+                "23" => Chromosome::X,
+                "24" => Chromosome::Y,
+                "25" => continue,
+                other => match other.parse::<u8>() {
+                    Ok(n) if (1..=22).contains(&n) => Chromosome::Autosome,
+                    _ => continue,
+                },
+            };
+
+            let pos = match fields[2].trim().parse::<u64>() {
+                Ok(pos) => pos,
+                Err(_) => continue,
+            };
+
+            f(chrom, pos, fields[3].trim());
+        }
+
+        Ok(())
+    }
+
+    fn is_missing_genotype(genotype: &str) -> bool {
+        let g = genotype.trim();
+        g.is_empty() || g.contains('-') || g == "0" || g == "00" || g.eq_ignore_ascii_case("NA")
+    }
+
+    fn is_heterozygous(genotype: &str) -> bool {
+        let g = genotype.as_bytes();
+        g.len() == 2 && g[0] != g[1]
+    }
+
+    #[test]
+    fn dtc_sample_infers_male() {
+        let path = "data/genome_Christopher_Smith_v5_Full_20230926164611_test.txt";
+        let constants = AlgorithmConstants::from_build(GenomeBuild::Build37);
+
+        let mut attempted_autosomes = 0_u64;
+        let mut attempted_y_nonpar = 0_u64;
+        for_each_dtc_row(path, |chrom, pos, _geno| {
+            match chrom {
+                Chromosome::Autosome => attempted_autosomes += 1,
+                Chromosome::Y => {
+                    if constants.is_in_y_non_par(pos) {
+                        attempted_y_nonpar += 1;
+                    }
+                }
+                Chromosome::X => {}
+            }
+        })
+        .expect("failed to scan DTC data for platform counts");
+
+        assert!(attempted_autosomes > 0);
+        assert!(attempted_y_nonpar > 0);
+
+        let config = InferenceConfig {
+            build: GenomeBuild::Build37,
+            platform: PlatformDefinition {
+                n_attempted_autosomes: attempted_autosomes,
+                n_attempted_y_nonpar: attempted_y_nonpar,
+            },
+            thresholds: Some(DecisionThresholds::default()),
+        };
+        let mut acc = SexInferenceAccumulator::new(config);
+
+        for_each_dtc_row(path, |chrom, pos, geno| {
+            if is_missing_genotype(geno) {
+                return;
+            }
+            let variant = VariantInfo {
+                chrom,
+                pos,
+                is_heterozygous: is_heterozygous(geno),
+            };
+            acc.process_variant(&variant);
+        })
+        .expect("failed to parse DTC data for inference");
+
+        let result = acc.finish().unwrap();
+        println!("inferred sex: {:?}", result.final_call);
+        println!("report: {:#?}", result.report);
+        assert_eq!(result.final_call, InferredSex::Male);
     }
 }

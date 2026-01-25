@@ -438,6 +438,7 @@ fn classify_sex(
 
 #[cfg(test)]
 mod tests {
+    use flate2::read::GzDecoder;
     use super::*;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
@@ -724,12 +725,21 @@ mod tests {
         assert!(matches!(err, InferenceError::ObservedExceedsAttempted(_)));
     }
 
+    fn open_dtc_reader(path: &str) -> std::io::Result<Box<dyn BufRead>> {
+        let file = File::open(path)?;
+        if path.ends_with(".gz") {
+            let decoder = GzDecoder::new(file);
+            Ok(Box::new(BufReader::new(decoder)))
+        } else {
+            Ok(Box::new(BufReader::new(file)))
+        }
+    }
+
     fn for_each_dtc_row<F>(path: &str, mut f: F) -> std::io::Result<()>
     where
         F: FnMut(Chromosome, u64, &str),
     {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
+        let reader = open_dtc_reader(path)?;
 
         for line in reader.lines() {
             let line = line?;
@@ -779,7 +789,7 @@ mod tests {
     #[test]
     fn dtc_sample_infers_male() {
         let path = format!(
-            "{}/data/genome_Christopher_Smith_v5_Full_20230926164611_test.txt",
+            "{}/data/genome_Christopher_Smith_v5_Full_20230926164611_test.txt.gz",
             env!("CARGO_MANIFEST_DIR")
         );
         let constants = AlgorithmConstants::from_build(GenomeBuild::Build37);

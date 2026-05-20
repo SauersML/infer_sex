@@ -313,26 +313,39 @@ def _coerce_chromosome(value) -> Chromosome:
     raise ValueError(f"Cannot interpret {value!r} as a chromosome.")
 
 
-def _chromosome_codes_from_strings(values: Sequence[str]) -> np.ndarray:
-    """Vectorise common chromosome string formats to internal codes."""
+_ENUM_TO_CODE = {
+    "AUTOSOME": _CHROM_CODE_AUTO,
+    "X": _CHROM_CODE_X,
+    "Y": _CHROM_CODE_Y,
+}
+
+
+def _chromosome_codes_from_strings(values: Sequence) -> np.ndarray:
+    """Vectorise common chromosome string formats to internal codes.
+
+    Accepts the full `Chromosome` enum, its string values, plain "chrN" /
+    "N" labels, and "M"/"MT" (mapped to autosome). Anything else is
+    encoded as ``-1`` and silently dropped at accumulation time.
+    """
     arr = np.asarray(values, dtype=object)
     out = np.full(arr.shape, -1, dtype=np.int8)
-    # Normalise: strip leading "chr", uppercase.
     for i, raw in enumerate(arr):
-        s = str(raw)
+        # Unwrap Chromosome enum members directly.
+        if isinstance(raw, Chromosome):
+            out[i] = _ENUM_TO_CODE[raw.name]
+            continue
+        s = str(raw).strip()
         if s.lower().startswith("chr"):
             s = s[3:]
         u = s.upper()
-        if u == "X":
-            out[i] = _CHROM_CODE_X
-        elif u == "Y":
-            out[i] = _CHROM_CODE_Y
-        elif u in ("M", "MT", "MITO"):
+        if u in _ENUM_TO_CODE:
+            out[i] = _ENUM_TO_CODE[u]
+            continue
+        if u in ("M", "MT", "MITO"):
             out[i] = _CHROM_CODE_AUTO
         elif u.isdigit() and 1 <= int(u) <= 22:
             out[i] = _CHROM_CODE_AUTO
         else:
-            # Ignore unknown contigs (e.g. ALT/decoys).
             out[i] = -1
     return out
 
@@ -853,37 +866,64 @@ def _stream_plink(
     if n_variants == 0:
         return
 
-    with open(bed, "rb") as f:
-        magic = f.read(3)
+    # Validate file size + magic, then read just the byte we need per
+    # variant. For the column-slice approach we'd need either mmap (with
+    # painful BufferError handling on close) or a full-file read (too
+    # large for biobank-scale cohorts). Per-variant ``os.pread`` lets the
+    # OS page cache do its job — kernel reads in 4K pages, subsequent
+    # variants in the same page hit cache, no extra syscalls escape
+    # into userspace beyond the read() itself.
+    fd = os.open(str(bed), os.O_RDONLY)
+    try:
+        file_size = os.fstat(fd).st_size
+        expected_size = 3 + bytes_per_variant * n_variants
+        if file_size < 3:
+            raise ValueError(f"{bed}: truncated .bed file (size {file_size})")
+        magic = os.read(fd, 3)
         if magic[:2] != b"\x6c\x1b":
             raise ValueError(f"{bed}: not a PLINK .bed file (bad magic)")
         if magic[2] != 0x01:
             raise ValueError(
                 f"{bed}: only variant-major .bed files are supported (magic byte {magic[2]:#x})"
             )
+        if file_size < expected_size:
+            raise ValueError(
+                f"{bed}: truncated for {n_variants} variants × {bytes_per_variant} bytes "
+                f"(expected {expected_size}, got {file_size})"
+            )
 
-        # Read only the byte of interest per variant.
-        chunk = 50_000
-        codes_chunk = np.empty(chunk, dtype=object)
-        pos_chunk = np.empty(chunk, dtype=np.int64)
-        het_chunk = np.empty(chunk, dtype=bool)
-        idx = 0
-        for v in range(n_variants):
-            f.seek(3 + v * bytes_per_variant + byte_in_variant)
-            b = f.read(1)
-            if not b:
-                break
-            gt = (b[0] >> bit_in_byte) & 0b11
-            # PLINK encoding: 00 hom A1, 01 missing, 10 het, 11 hom A2.
-            if gt == 0b01:
-                continue
-            is_het = gt == 0b10
-            codes_chunk[idx] = bim_chrom[v]
-            pos_chunk[idx] = bim_pos[v]
-            het_chunk[idx] = is_het
-            idx += 1
-            if idx == chunk:
-                yield codes_chunk[:idx].copy(), pos_chunk[:idx].copy(), het_chunk[:idx].copy()
-                idx = 0
-        if idx:
-            yield codes_chunk[:idx].copy(), pos_chunk[:idx].copy(), het_chunk[:idx].copy()
+        if bytes_per_variant <= 128:
+            # Cohort is small enough that loading the BED body fits in
+            # memory (≤128 bytes/variant × n variants). Numpy reshape +
+            # column slice runs at C speed.
+            raw = os.read(fd, bytes_per_variant * n_variants)
+            if len(raw) != bytes_per_variant * n_variants:
+                raise ValueError(
+                    f"{bed}: short read ({len(raw)} of expected {bytes_per_variant * n_variants} bytes)"
+                )
+            arr = np.frombuffer(raw, dtype=np.uint8)
+            matrix = arr.reshape(n_variants, bytes_per_variant)
+            target = np.ascontiguousarray(matrix[:, byte_in_variant])
+        else:
+            # Larger cohorts — one pread per variant. The kernel keeps
+            # adjacent variant bytes hot in the page cache.
+            buf = bytearray(n_variants)
+            for v in range(n_variants):
+                got = os.pread(fd, 1, 3 + v * bytes_per_variant + byte_in_variant)
+                if not got:
+                    raise ValueError(f"{bed}: unexpected EOF at variant {v}")
+                buf[v] = got[0]
+            target = np.frombuffer(bytes(buf), dtype=np.uint8)
+    finally:
+        os.close(fd)
+
+    gts = (target >> bit_in_byte) & np.uint8(0b11)
+    # PLINK encoding: 00 hom A1, 01 missing, 10 het, 11 hom A2.
+    keep = gts != 0b01
+    if not keep.any():
+        return
+
+    chrom_arr = np.asarray(bim_chrom, dtype=object)[keep]
+    pos_arr = np.asarray(bim_pos, dtype=np.int64)[keep]
+    het_arr = (gts[keep] == 0b10)
+    yield chrom_arr, pos_arr, het_arr

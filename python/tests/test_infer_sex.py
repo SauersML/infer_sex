@@ -233,6 +233,39 @@ def test_add_batch_rejects_mismatched_lengths():
         acc.add_batch([0, 0], [1, 2, 3], [False, True, False])
 
 
+def test_add_batch_accepts_chromosome_enum_objects():
+    """Regression: object-dtype arrays of Chromosome members used to be
+    silently dropped because str(Chromosome.X) == 'Chromosome.X', which
+    doesn't match any handled pattern."""
+    acc = SexInferenceAccumulator(cfg38())
+    chroms = np.array(
+        [Chromosome.AUTOSOME, Chromosome.X, Chromosome.Y, Chromosome.AUTOSOME],
+        dtype=object,
+    )
+    pos = np.array([1_000_000, X_NON_PAR_POS, Y_NON_PAR_POS, 2_000_000], dtype=np.int64)
+    het = np.array([False, True, False, True])
+    acc.add_batch(chroms, pos, het)
+    snap = acc.snapshot()
+    assert snap.auto_valid_count == 2
+    assert snap.x_non_par_valid_count == 1
+    assert snap.x_non_par_het_count == 1
+    assert snap.y_non_par_valid_count == 1
+
+
+def test_add_batch_accepts_chromosome_enum_values():
+    """Lowercase 'autosome'/'x'/'y' strings (Chromosome enum values) work too."""
+    acc = SexInferenceAccumulator(cfg38())
+    acc.add_batch(
+        np.array(["autosome", "x", "y"], dtype=object),
+        np.array([1_000_000, X_NON_PAR_POS, Y_NON_PAR_POS], dtype=np.int64),
+        np.array([False, True, False]),
+    )
+    snap = acc.snapshot()
+    assert snap.auto_valid_count == 1
+    assert snap.x_non_par_valid_count == 1
+    assert snap.y_non_par_valid_count == 1
+
+
 # ---------------------------------------------------------------------------
 # Public façade
 # ---------------------------------------------------------------------------
@@ -408,6 +441,24 @@ def test_infer_from_plink(tmp_path):
     )
     assert res_a.report.x_non_par_het_count == 0
     assert res_b.report.x_non_par_het_count == 500
+
+
+def test_infer_from_plink_rejects_truncated_bed(tmp_path):
+    """Regression: previously the per-variant seek/read could silently
+    return an empty byte and continue; we now precheck file size."""
+    prefix = tmp_path / "trunc"
+    (prefix.parent / "trunc.bim").write_text(
+        "1\trs1\t0\t1\tA\tG\n1\trs2\t0\t2\tA\tG\n1\trs3\t0\t3\tA\tG\n"
+    )
+    (prefix.parent / "trunc.fam").write_text("F\tA\t0\t0\t0\t-9\nF\tB\t0\t0\t0\t-9\n")
+    # Magic + one variant only (need three).
+    (prefix.parent / "trunc.bed").write_bytes(b"\x6c\x1b\x01\x00")
+    with pytest.raises(ValueError, match="truncated"):
+        infer_from_plink(
+            prefix,
+            build="hg38",
+            platform=PlatformDefinition(n_attempted_autosomes=10, n_attempted_y_nonpar=10),
+        )
 
 
 def test_infer_from_plink_rejects_sample_major(tmp_path):

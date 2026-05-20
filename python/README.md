@@ -43,6 +43,34 @@ result = inferer.infer_from_arrays(chrom_codes, positions, is_het)
 PAR/non-PAR coordinates, decision thresholds, and rounding behaviour all
 match the upstream Rust crate exactly.
 
+## Shortcuts: pass what you already know
+
+`infer_sex` never touches the network. To avoid spending compute on
+build detection, supply the build directly. The `PlatformDefinition` is
+how you communicate the *attempted* locus counts that the algorithm
+normalises against — pre-scan them once (e.g. from a BIM file) and
+re-use the same `SexInferer` for every sample on that platform:
+
+```python
+from infer_sex import SexInferer, PlatformDefinition
+
+inferer = SexInferer(
+    build="hg38",                                   # skip build inference
+    platform=PlatformDefinition(
+        n_attempted_autosomes=2_000,                # pre-computed locus counts
+        n_attempted_y_nonpar=1_000,
+    ),
+)
+
+# Custom decision thresholds (instead of the Rust crate's default fit):
+from infer_sex import DecisionThresholds
+inferer = SexInferer(
+    build="hg38",
+    platform=PlatformDefinition(...),
+    thresholds=DecisionThresholds(slope=0.3, intercept=0.25),
+)
+```
+
 ## Inputs
 
 * VCF (.vcf / .vcf.gz) — single sample by default; pass `sample=...` to

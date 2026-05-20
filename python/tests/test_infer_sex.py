@@ -31,6 +31,8 @@ from infer_sex import (
     infer_from_records,
     infer_from_plink,
     infer_from_vcf,
+    platform_from_bim,
+    platform_from_vcf,
 )
 
 
@@ -527,6 +529,45 @@ def test_evidence_report_as_dict_round_trip():
 def test_variantinfo_validates_position():
     with pytest.raises(ValueError):
         VariantInfo(chrom=Chromosome.X, pos=-1, is_heterozygous=True)
+
+
+def test_platform_from_bim_counts_autosomes_and_y_nonpar(tmp_path):
+    bim = tmp_path / "panel.bim"
+    rows = []
+    for i in range(5):
+        rows.append(f"1\trs{i}\t0\t{1000 + i}\tA\tG")          # autosome
+    for i in range(3):
+        rows.append(f"X\trsX{i}\t0\t{X_NON_PAR_POS + i}\tA\tG")  # X non-PAR (NOT counted)
+    for i in range(2):
+        rows.append(f"Y\trsYp{i}\t0\t{Y_PAR_POS + i}\tA\tG")     # Y PAR (NOT counted)
+    for i in range(4):
+        rows.append(f"Y\trsYn{i}\t0\t{Y_NON_PAR_POS + i}\tA\tG") # Y non-PAR (counted)
+    for i in range(2):
+        rows.append(f"chr22\trsA{i}\t0\t1000\tA\tG")              # chr-prefixed autosome
+    rows.append("MT\trsMT\t0\t100\tA\tG")                        # mitochondrial — dropped
+    rows.append("GL000001.1\trsAlt\t0\t100\tA\tG")               # alt contig — dropped
+    bim.write_text("\n".join(rows) + "\n")
+
+    platform = platform_from_bim(bim, build="hg38")
+    assert platform.n_attempted_autosomes == 7  # 5 + 2 chr-prefixed
+    assert platform.n_attempted_y_nonpar == 4
+
+
+def test_platform_from_vcf(tmp_path):
+    vcf = tmp_path / "panel.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.5\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+        "1\t1000\t.\tA\tG\t.\t.\t.\n"
+        "1\t1001\t.\tA\tG\t.\t.\t.\n"
+        f"Y\t{Y_NON_PAR_POS}\t.\tA\tG\t.\t.\t.\n"
+        f"Y\t{Y_NON_PAR_POS + 1}\t.\tA\tG\t.\t.\t.\n"
+        f"Y\t{Y_PAR_POS}\t.\tA\tG\t.\t.\t.\n"   # PAR — dropped
+        f"X\t{X_NON_PAR_POS}\t.\tA\tG\t.\t.\t.\n"  # X — dropped
+    )
+    platform = platform_from_vcf(vcf, build="hg38")
+    assert platform.n_attempted_autosomes == 2
+    assert platform.n_attempted_y_nonpar == 2
 
 
 def test_inference_result_helpers():

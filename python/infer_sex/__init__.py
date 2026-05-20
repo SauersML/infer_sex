@@ -50,6 +50,8 @@ from ._api import (
     infer_from_records,
     infer_from_vcf,
     infer_from_plink,
+    platform_from_bim,
+    platform_from_vcf,
 )
 
 __all__ = [
@@ -71,6 +73,8 @@ __all__ = [
     "infer_from_records",
     "infer_from_vcf",
     "infer_from_plink",
+    "platform_from_bim",
+    "platform_from_vcf",
 ]
 
 __version__ = "0.1.0"

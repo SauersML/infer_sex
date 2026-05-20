@@ -321,33 +321,48 @@ _ENUM_TO_CODE = {
 }
 
 
+def _classify_chromosome_token(raw) -> int:
+    if isinstance(raw, Chromosome):
+        return _ENUM_TO_CODE[raw.name]
+    s = str(raw).strip()
+    if s.lower().startswith("chr"):
+        s = s[3:]
+    u = s.upper()
+    if u in _ENUM_TO_CODE:
+        return _ENUM_TO_CODE[u]
+    if u in ("M", "MT", "MITO"):
+        return _CHROM_CODE_AUTO
+    if u.isdigit() and 1 <= int(u) <= 22:
+        return _CHROM_CODE_AUTO
+    return -1
+
+
 def _chromosome_codes_from_strings(values: Sequence) -> np.ndarray:
     """Vectorise common chromosome string formats to internal codes.
 
-    Accepts the full `Chromosome` enum, its string values, plain "chrN" /
-    "N" labels, and "M"/"MT" (mapped to autosome). Anything else is
-    encoded as ``-1`` and silently dropped at accumulation time.
+    Accepts the full ``Chromosome`` enum, its string values, plain
+    "chrN" / "N" labels, and "M"/"MT" (mapped to autosome). Anything
+    else is encoded as ``-1`` and silently dropped at accumulation time.
+
+    For VCF / PLINK chunks where the same chromosome string repeats
+    thousands of times, we cache the per-token classification inside one
+    call so the second-and-onward occurrences become a dict lookup.
     """
     arr = np.asarray(values, dtype=object)
-    out = np.full(arr.shape, -1, dtype=np.int8)
+    out = np.empty(arr.shape, dtype=np.int8)
+    cache: dict = {}
     for i, raw in enumerate(arr):
-        # Unwrap Chromosome enum members directly.
-        if isinstance(raw, Chromosome):
-            out[i] = _ENUM_TO_CODE[raw.name]
+        # Cache by the raw value when it's hashable (str, enum, int);
+        # fall back to direct classification otherwise.
+        try:
+            cached = cache.get(raw)
+        except TypeError:
+            out[i] = _classify_chromosome_token(raw)
             continue
-        s = str(raw).strip()
-        if s.lower().startswith("chr"):
-            s = s[3:]
-        u = s.upper()
-        if u in _ENUM_TO_CODE:
-            out[i] = _ENUM_TO_CODE[u]
-            continue
-        if u in ("M", "MT", "MITO"):
-            out[i] = _CHROM_CODE_AUTO
-        elif u.isdigit() and 1 <= int(u) <= 22:
-            out[i] = _CHROM_CODE_AUTO
-        else:
-            out[i] = -1
+        if cached is None:
+            cached = _classify_chromosome_token(raw)
+            cache[raw] = cached
+        out[i] = cached
     return out
 
 
@@ -700,6 +715,101 @@ def _open_text(path: Union[str, os.PathLike]) -> io.TextIOBase:
     return open(p, "r", encoding="utf-8", errors="replace")
 
 
+# ---------------------------------------------------------------------------
+# Platform derivation
+# ---------------------------------------------------------------------------
+
+
+def platform_from_bim(
+    bim_path: Union[str, os.PathLike],
+    *,
+    build: Union[str, GenomeBuild] = GenomeBuild.BUILD38,
+) -> PlatformDefinition:
+    """Scan a PLINK ``.bim`` and return a ready-to-use ``PlatformDefinition``.
+
+    Counts every row whose chromosome column resolves to an autosome (1–22)
+    or to a Y non-PAR position. Anything else (X, Y PAR, M/MT, alt
+    contigs) is dropped. The variant set you stream into the matching
+    ``SexInferer`` must be derived from the same BIM — or at least share
+    the same per-chromosome locus density — otherwise the normalisation
+    is meaningless.
+
+    The ``build`` kwarg picks the PAR coordinates used to decide which Y
+    rows count as non-PAR; it should match the build of your data.
+    """
+    constants = AlgorithmConstants.from_build(build)
+    n_auto = 0
+    n_y_nonpar = 0
+    with open(bim_path, "r") as f:
+        for line in f:
+            if not line.strip() or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            chrom = parts[0]
+            try:
+                pos = int(parts[3])
+            except ValueError:
+                continue
+            # Strip optional leading "chr".
+            if chrom.lower().startswith("chr"):
+                chrom = chrom[3:]
+            u = chrom.upper()
+            if u.isdigit() and 1 <= int(u) <= 22:
+                n_auto += 1
+            elif u == "Y" and constants.is_in_y_non_par(pos):
+                n_y_nonpar += 1
+            # Everything else (X, Y-PAR, M/MT, alt contigs) is not counted.
+    return PlatformDefinition(
+        n_attempted_autosomes=n_auto,
+        n_attempted_y_nonpar=n_y_nonpar,
+    )
+
+
+def platform_from_vcf(
+    vcf_path: Union[str, os.PathLike],
+    *,
+    build: Union[str, GenomeBuild] = GenomeBuild.BUILD38,
+) -> PlatformDefinition:
+    """Same idea as ``platform_from_bim`` but for a VCF / VCF.gz.
+
+    Useful when your data is delivered as VCF and you don't have a BIM
+    alongside. Reads only the first two columns of each record, so the
+    cost is comparable to ``wc -l`` on the file.
+    """
+    constants = AlgorithmConstants.from_build(build)
+    n_auto = 0
+    n_y_nonpar = 0
+    with _open_text(vcf_path) as f:
+        for raw in f:
+            if not raw or raw.startswith("#"):
+                continue
+            tab = raw.find("\t")
+            if tab < 0:
+                continue
+            chrom = raw[:tab]
+            rest = raw[tab + 1:]
+            tab2 = rest.find("\t")
+            if tab2 < 0:
+                continue
+            try:
+                pos = int(rest[:tab2])
+            except ValueError:
+                continue
+            if chrom.lower().startswith("chr"):
+                chrom = chrom[3:]
+            u = chrom.upper()
+            if u.isdigit() and 1 <= int(u) <= 22:
+                n_auto += 1
+            elif u == "Y" and constants.is_in_y_non_par(pos):
+                n_y_nonpar += 1
+    return PlatformDefinition(
+        n_attempted_autosomes=n_auto,
+        n_attempted_y_nonpar=n_y_nonpar,
+    )
+
+
 def _stream_vcf(
     vcf_path: Union[str, os.PathLike],
     sample: Optional[Union[str, int]],
@@ -775,10 +885,17 @@ def _stream_vcf(
             try:
                 gt_field_idx = fmt.index("GT")
             except ValueError:
+                # No GT in this row — drop.
                 chrom_buf.pop()
                 pos_buf.pop()
                 continue
-            gt_raw = fields[sample_idx].split(":")[gt_field_idx]
+            sample_parts = fields[sample_idx].split(":")
+            if gt_field_idx >= len(sample_parts):
+                # Spec violation: sample shorter than FORMAT. Drop.
+                chrom_buf.pop()
+                pos_buf.pop()
+                continue
+            gt_raw = sample_parts[gt_field_idx]
             het = _parse_gt_is_het(gt_raw)
             if het is None:
                 chrom_buf.pop()

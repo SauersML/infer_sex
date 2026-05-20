@@ -14,6 +14,7 @@ from __future__ import annotations
 import gzip
 import io
 import os
+import warnings
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -731,9 +732,19 @@ def _stream_vcf(
                 if sample is None:
                     sample_idx = 9
                     if len(samples) > 1:
-                        # Default to first sample but tell the user.
-                        # (Doesn't raise; surface via a clear behaviour.)
-                        pass
+                        # Don't raise — multi-sample VCFs are common and a
+                        # default-to-first-column behaviour is convenient
+                        # for one-off calls. But a silent pick produces
+                        # confusing "wrong sex inferred" bug reports, so
+                        # we surface it via UserWarning and put the
+                        # picked sample ID into the message.
+                        warnings.warn(
+                            f"{vcf_path}: VCF contains {len(samples)} samples; "
+                            f"using the first one ({samples[0]!r}). "
+                            f"Pass sample=... to choose explicitly.",
+                            UserWarning,
+                            stacklevel=4,
+                        )
                 elif isinstance(sample, int):
                     if not (0 <= sample < len(samples)):
                         raise IndexError(
@@ -866,20 +877,18 @@ def _stream_plink(
     if n_variants == 0:
         return
 
-    # Validate file size + magic, then read just the byte we need per
-    # variant. For the column-slice approach we'd need either mmap (with
-    # painful BufferError handling on close) or a full-file read (too
-    # large for biobank-scale cohorts). Per-variant ``os.pread`` lets the
-    # OS page cache do its job — kernel reads in 4K pages, subsequent
-    # variants in the same page hit cache, no extra syscalls escape
-    # into userspace beyond the read() itself.
-    fd = os.open(str(bed), os.O_RDONLY)
-    try:
-        file_size = os.fstat(fd).st_size
+    # Validate file size + magic, then materialise just the byte column
+    # we need per variant. We use np.memmap (rather than mmap.mmap +
+    # np.frombuffer) because the numpy version cleans up its own buffer
+    # references — no BufferError dance at close — and because fancy
+    # indexing only pages in the bytes we actually touch. For a biobank-
+    # scale .bed (75GB+), the OS only fetches ~n_variants pages.
+    with open(bed, "rb") as f:
+        file_size = os.fstat(f.fileno()).st_size
         expected_size = 3 + bytes_per_variant * n_variants
         if file_size < 3:
             raise ValueError(f"{bed}: truncated .bed file (size {file_size})")
-        magic = os.read(fd, 3)
+        magic = f.read(3)
         if magic[:2] != b"\x6c\x1b":
             raise ValueError(f"{bed}: not a PLINK .bed file (bad magic)")
         if magic[2] != 0x01:
@@ -892,30 +901,17 @@ def _stream_plink(
                 f"(expected {expected_size}, got {file_size})"
             )
 
-        if bytes_per_variant <= 128:
-            # Cohort is small enough that loading the BED body fits in
-            # memory (≤128 bytes/variant × n variants). Numpy reshape +
-            # column slice runs at C speed.
-            raw = os.read(fd, bytes_per_variant * n_variants)
-            if len(raw) != bytes_per_variant * n_variants:
-                raise ValueError(
-                    f"{bed}: short read ({len(raw)} of expected {bytes_per_variant * n_variants} bytes)"
-                )
-            arr = np.frombuffer(raw, dtype=np.uint8)
-            matrix = arr.reshape(n_variants, bytes_per_variant)
-            target = np.ascontiguousarray(matrix[:, byte_in_variant])
-        else:
-            # Larger cohorts — one pread per variant. The kernel keeps
-            # adjacent variant bytes hot in the page cache.
-            buf = bytearray(n_variants)
-            for v in range(n_variants):
-                got = os.pread(fd, 1, 3 + v * bytes_per_variant + byte_in_variant)
-                if not got:
-                    raise ValueError(f"{bed}: unexpected EOF at variant {v}")
-                buf[v] = got[0]
-            target = np.frombuffer(bytes(buf), dtype=np.uint8)
-    finally:
-        os.close(fd)
+    arr = np.memmap(str(bed), dtype=np.uint8, mode="r")
+    # Offset every variant's byte column. arr[offsets].copy() materialises
+    # those bytes into RAM and detaches the result from the memmap so the
+    # mapping can be released immediately.
+    offsets = (
+        np.arange(n_variants, dtype=np.int64) * bytes_per_variant
+        + 3
+        + byte_in_variant
+    )
+    target = np.ascontiguousarray(arr[offsets])
+    del arr  # release the memmap
 
     gts = (target >> bit_in_byte) & np.uint8(0b11)
     # PLINK encoding: 00 hom A1, 01 missing, 10 het, 11 hom A2.

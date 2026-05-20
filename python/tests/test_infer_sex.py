@@ -352,6 +352,43 @@ def test_infer_from_vcf_gzip_and_phased_and_missing(tmp_path):
     assert result.report.auto_valid_count == 1_500
 
 
+def test_infer_from_vcf_warns_on_multi_sample_default(tmp_path):
+    """Regression: previously the default-to-first-sample fallback was
+    completely silent. It now emits a UserWarning naming the picked
+    sample so an incorrect call is debuggable."""
+    vcf = tmp_path / "multi.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.5\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE_A\tSAMPLE_B\n"
+        f"X\t{X_NON_PAR_POS}\t.\tA\tG\t.\t.\t.\tGT\t0/1\t0/0\n"
+        f"1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/0\t0/0\n"
+    )
+    with pytest.warns(UserWarning, match="SAMPLE_A"):
+        infer_from_vcf(
+            vcf,
+            build="hg38",
+            platform=PlatformDefinition(n_attempted_autosomes=10, n_attempted_y_nonpar=10),
+        )
+
+
+def test_infer_from_vcf_no_warning_when_sample_explicit(tmp_path):
+    vcf = tmp_path / "multi.vcf"
+    vcf.write_text(
+        "##fileformat=VCFv4.5\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tA\tB\n"
+        f"1\t100\t.\tA\tG\t.\t.\t.\tGT\t0/0\t0/0\n"
+    )
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("error")  # any UserWarning becomes a test failure
+        infer_from_vcf(
+            vcf,
+            build="hg38",
+            platform=PlatformDefinition(n_attempted_autosomes=10, n_attempted_y_nonpar=10),
+            sample="B",
+        )
+
+
 def test_infer_from_vcf_selects_sample_by_id(tmp_path):
     vcf = tmp_path / "multi.vcf"
     vcf.write_text(
